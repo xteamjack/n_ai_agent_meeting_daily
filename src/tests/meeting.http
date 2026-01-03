@@ -1,0 +1,28 @@
+### Start Meeting
+POST http://localhost:3110/daily/start
+Content-Type: application/json
+
+{}
+
+###
+
+### End Meeting
+POST http://localhost:3110/daily/end
+Content-Type: application/json
+
+{
+  "meetingId": "PASTE_MEETING_ID_HERE"
+}
+
+###
+
+### Simulate Daily Recording Webhook
+POST http://localhost:3110/webhook/daily
+Content-Type: application/json
+
+{
+  "payload": {
+    "room_name": "test-meeting-123",
+    "download_url": "https://example.com/recording.mp4"
+  }
+}
