@@ -26,3 +26,9 @@ Content-Type: application/json
     "download_url": "https://example.com/recording.mp4"
   }
 }
+
+### Start Meeting With Bot
+POST http://localhost:3110/daily/start-with-bot
+Content-Type: application/json
+
+{}

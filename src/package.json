@@ -10,12 +10,15 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "'": "file:daily-co/daily-js/node",
+    "@daily-co/daily-js": "^0.85.0",
     "axios": "^1.13.2",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "fs-extra": "^11.3.3",
     "multer": "^2.0.2",
     "uuid": "^13.0.0",
+    "wrtc": "^0.4.7",
     "ws": "^8.18.3"
   }
 }
