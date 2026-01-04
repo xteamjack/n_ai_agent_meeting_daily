@@ -253,6 +253,10 @@ async function startBot({ meetingId, roomUrl, token }) {
     console.log(`👤 Participant joined: ${evt.participant.user_name || evt.participant.session_id}`);
   });
 
+  call.on("participant-left", (evt) => {
+    console.log(`👋 Participant left: ${evt.participant.user_name || evt.participant.session_id}`);
+  });
+
   call.on("left-meeting", () => {
     console.log(`🚪 Bot left meeting ${meetingId}`);
   });

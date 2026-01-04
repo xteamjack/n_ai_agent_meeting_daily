@@ -43,7 +43,8 @@ router.get("/daily/health", async (req, res) => {
  * Start meeting WITH bot
  */
 router.post("/daily/start-with-bot", async (req, res) => {
-  const room = await createRoom();
+  const { roomName } = req.body;
+  const room = await createRoom(roomName);
   const token = await createMeetingToken(room.name);
 
   startBot({

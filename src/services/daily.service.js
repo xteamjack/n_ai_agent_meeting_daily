@@ -5,10 +5,11 @@ const headers = {
   Authorization: `Bearer ${DAILY_API_KEY}`,
 };
 
-async function createRoom() {
+async function createRoom(roomName) {
   const res = await axios.post(
     `${DAILY_BASE_URL}/rooms`,
     {
+      name: roomName,
       properties: {
         enable_recording: "cloud",
         enable_chat: false,
@@ -16,6 +17,7 @@ async function createRoom() {
     },
     { headers }
   );
+  console.log(`🏠 Room created: ${res.data.name} at ${res.data.url}`);
   return res.data;
 }
 
@@ -34,6 +36,7 @@ async function createMeetingToken(roomName) {
 }
 
 async function endRoom(roomName) {
+  console.log(`🛑 Ending room: ${roomName}`);
   await axios.delete(`${DAILY_BASE_URL}/rooms/${roomName}`, { headers });
 }
 
