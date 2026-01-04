@@ -152,6 +152,9 @@ global.document = {
   addEventListener: global.addEventListener,
   removeEventListener: global.removeEventListener,
   dispatchEvent: global.dispatchEvent,
+  querySelectorAll: () => [],
+  querySelector: () => null,
+  getElementById: () => null,
 };
 
 // Add standard browser events/constructors if missing
