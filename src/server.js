@@ -28,6 +28,27 @@ app.post("/webhook/daily", async (req, res) => {
   res.sendStatus(200);
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// app.listen(PORT, () => {
+//   console.log(`Server running on port ${PORT}`);
+// });
+
+app.listen(process.env.PORT, () => {
+  console.log(`Server running on port ${process.env.PORT}`);
+  console.log(formatIST(new Date()));
+  console.log(new Date().toISOString());
 });
+
+function formatIST(dateInput) {
+  const date = new Date(dateInput); // can be Date object, ISO string, or timestamp
+
+  return date.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}

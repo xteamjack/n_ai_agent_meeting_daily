@@ -1,3 +1,6 @@
+### check health
+GET http://localhost:3110/daily/health
+
 ### Start Meeting
 POST http://localhost:3110/daily/start
 Content-Type: application/json
