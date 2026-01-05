@@ -1,0 +1,33 @@
+### configure webhook from api
+### Configure webhook from ehre
+### make sure webhook is running brefore calling this
+POST https://api.daily.co/v1/webhooks
+Authorization: Bearer 0506743019fb18abd2f9c3669c353fb2261692e222b355b315b700a5e08327e5
+Content-Type: application/json
+
+{
+  "url": "https://digihire.ai/daily/webhook",
+  "eventTypes": ["recording.ready-to-download"]
+}
+
+### list webhooks
+### State should be "state": "ACTIVE",
+GET https://api.daily.co/v1/webhooks
+Authorization: Bearer 0506743019fb18abd2f9c3669c353fb2261692e222b355b315b700a5e08327e5
+
+### delete webhook
+DELETE https://api.daily.co/v1/webhooks/9d639b6c-18f9-4435-a499-925afb124b87
+Authorization: Bearer 0506743019fb18abd2f9c3669c353fb2261692e222b355b315b700a5e08327e5
+
+
+### activate the webhook when blocked by daily.co
+### note daily.co can deactive teh webhook when it continously fails for 3 times
+
+POST https://api.daily.co/v1/webhooks/9d639b6c-18f9-4435-a499-925afb124b87
+Authorization: Bearer 0506743019fb18abd2f9c3669c353fb2261692e222b355b315b700a5e08327e5
+Content-Type: application/json
+
+{
+    "url": "https://digihire.ai/daily/webhook",
+  "state": "ACTIVE"
+}

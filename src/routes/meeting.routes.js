@@ -10,6 +10,9 @@ const { registerBot, stopBot } = require("../bot/botRegistry");
 
 const router = express.Router();
 
+router.get("/daily/health", async (req, res) => {
+  res.json({ status: "heathy" });
+});
 /**
  * Start meeting
  */

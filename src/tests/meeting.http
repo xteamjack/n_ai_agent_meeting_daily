@@ -14,7 +14,7 @@ POST http://localhost:3110/daily/end
 Content-Type: application/json
 
 {
-  "meetingId": "PASTE_MEETING_ID_HERE"
+  "meetingId": "testRoom02-236ad9d4"
 }
 
 ###

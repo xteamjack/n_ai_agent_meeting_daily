@@ -244,21 +244,63 @@ async function startBot({ meetingId, roomUrl, token }) {
     console.log(`⌛ Bot is joining meeting ${meetingId}...`);
   });
 
-  call.on("joined-meeting", () => {
+  let heartbeatInterval;
+  let humanParticipants = 0;
 
+  call.on("joined-meeting", (evt) => {
     console.log(`✅ Bot joined meeting ${meetingId}`);
+
+    // Check if anyone is already in the room
+    const participants = call.participants();
+    humanParticipants = Object.values(participants).filter(p => !p.local).length;
+
+    console.log(`👥 Current human participants: ${humanParticipants}`);
+
+    if (humanParticipants > 0) {
+      console.log("⏺️ Human(s) already present. Starting recording...");
+      call.startRecording();
+    }
+  });
+
+  call.on("recording-started", () => {
+    console.log("🔴 Recording started!");
+  });
+
+  call.on("recording-stopped", () => {
+    console.log("⏹️ Recording stopped. Bot leaving...");
+    call.leave().catch(console.error);
   });
 
   call.on("participant-joined", (evt) => {
-    console.log(`👤 Participant joined: ${evt.participant.user_name || evt.participant.session_id}`);
+    if (evt.participant.local) return; // Skip the bot itself
+
+    humanParticipants++;
+    console.log(`👤 Participant joined: ${evt.participant.user_name || evt.participant.session_id} (Total Humans: ${humanParticipants})`);
+
+    if (humanParticipants === 1) {
+      console.log("⏺️ First human joined. Starting recording...");
+      call.startRecording();
+    }
   });
 
   call.on("participant-left", (evt) => {
-    console.log(`👋 Participant left: ${evt.participant.user_name || evt.participant.session_id}`);
+    if (evt.participant.local) return;
+
+    humanParticipants = Math.max(0, humanParticipants - 1);
+    console.log(`👋 Participant left: ${evt.participant.user_name || evt.participant.session_id} (Total Humans: ${humanParticipants})`);
+
+    if (humanParticipants === 0) {
+      console.log("⏹️ Last human left. Stopping recording...");
+      call.stopRecording();
+    }
   });
 
   call.on("left-meeting", () => {
     console.log(`🚪 Bot left meeting ${meetingId}`);
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      console.log(`🛑 Heartbeat stopped for ${meetingId}`);
+    }
   });
 
   call.on("error", (err) => {
@@ -286,7 +328,7 @@ async function startBot({ meetingId, roomUrl, token }) {
     console.error("FAILED to join meeting:", err);
   }
 
-  setInterval(() => {
+  heartbeatInterval = setInterval(() => {
     console.log(`💓 Bot heartbeat for ${meetingId}`);
   }, 5000);
 

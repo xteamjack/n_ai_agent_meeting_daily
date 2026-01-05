@@ -1,0 +1,13 @@
+{
+  "meetingId": "roomx-7adcba7c",
+  "transcript": [
+    {
+      "speaker": "agent",
+      "text": "Hello, welcome to the meeting."
+    },
+    {
+      "speaker": "user",
+      "text": "Thanks."
+    }
+  ]
+}
