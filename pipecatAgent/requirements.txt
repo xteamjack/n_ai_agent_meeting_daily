@@ -1,0 +1,4 @@
+pipecat-ai
+openai
+deepgram-sdk
+elevenlabs
