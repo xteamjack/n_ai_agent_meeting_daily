@@ -33,10 +33,13 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.services.groq.llm import GroqLLMService
-from pipecat.processors.frameworks.rtvi import RTVIObserver, RTVIProcessor
+from pipecat.processors.frameworks.rtvi import RTVIObserver, RTVIProcessor, RTVIConfig
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 
 load_dotenv(override=True)
+
+import pipecat
+logger.info(f"Running Pipecat {pipecat.__version__}")
 
 async def run_bot(transport: BaseTransport):
     """Main bot logic."""
@@ -60,14 +63,36 @@ async def run_bot(transport: BaseTransport):
     messages = [
         {
             "role": "system",
-            "content": "You are a friendly AI assistant. Respond naturally and keep your answers conversational.",
+            # "content": "You are a friendly AI assistant. Respond naturally and keep your answers conversational.",
+            "content": (
+                "You are a friendly AI assistant in a voice meeting. "
+                "Keep responses natural and concise."
+            ),
         },
     ]
 
     context = LLMContext(messages)
     context_aggregator = LLMContextAggregatorPair(context)
 
-    rtvi = RTVIProcessor()
+    # rtvi = RTVIProcessor()
+    # Initialize RTVI with explicit config
+    rtvi = RTVIProcessor(
+        config=RTVIConfig(
+            config=[
+                {
+                    "service": "voice_agent",
+                    "options": [],
+                }
+            ],
+            initial_config=[
+                {
+                    "service": "voice_agent",
+                    "options": [],
+                }
+            ],
+        )
+    )
+
 
     # Pipeline - assembled from reusable components
     pipeline = Pipeline([
@@ -93,20 +118,40 @@ async def run_bot(transport: BaseTransport):
         ],
     )
 
+    # @rtvi.event_handler("on_client_ready")
+    # async def on_client_ready(rtvi):
+    #     await rtvi.set_bot_ready()
+        # Kick off the conversation
+        # await task.queue_frames([LLMRunFrame()])
+        
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
+        logger.info("calling set_bot_ready")
         await rtvi.set_bot_ready()
-        # Kick off the conversation
-        await task.queue_frames([LLMRunFrame()])
+        await task.queue_frames([
+            TextFrame(
+                role="assistant",
+                text="Hi! I'm ready whenever you'd like to start."
+            )
+        ])
 
-    @transport.event_handler("on_client_connected")
-    async def on_client_connected(transport, client):
-        logger.info("Client connected")
+    # @transport.event_handler("on_client_connected")
+    # async def on_client_connected(transport, client):
+    #     logger.info("Client connected")
 
+    # @transport.event_handler("on_client_disconnected")
+    # async def on_client_disconnected(transport, client):
+    #     logger.info("Client disconnected")
+    #     await task.cancel()
+    
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info("Client disconnected")
-        await task.cancel()
+        if client.is_bot:
+            logger.info("Bot disconnected – shutting down")
+            await task.cancel()
+        else:
+            logger.info(f"Participant left: {client.user_name}")
+
 
     runner = PipelineRunner(handle_sigint=False)
     await runner.run(task)
@@ -124,7 +169,10 @@ async def bot(runner_args: RunnerArguments):
                 params=DailyParams(
                     audio_in_enabled=True,
                     audio_out_enabled=True,
-                    vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+                    vad_analyzer=SileroVADAnalyzer(params=VADParams(
+                        stop_secs=0.5,
+                        min_speech_secs=0.3,
+                    )),
                     turn_analyzer=LocalSmartTurnAnalyzerV3(),
                 ),
             )
