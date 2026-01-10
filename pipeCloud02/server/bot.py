@@ -38,9 +38,6 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 
 load_dotenv(override=True)
 
-
-
-
 async def run_bot(transport: BaseTransport):
     """Main bot logic."""
     logger.info("Starting bot")
@@ -54,14 +51,11 @@ async def run_bot(transport: BaseTransport):
             voice_id=os.getenv("CARTESIA_VOICE_ID")
         )
 
-
     # LLM service
     llm = GroqLLMService(
             model=os.getenv("GROQ_MODEL"),
             api_key=os.getenv("GROQ_API_KEY")
         )
-
-
 
     messages = [
         {
@@ -73,34 +67,18 @@ async def run_bot(transport: BaseTransport):
     context = LLMContext(messages)
     context_aggregator = LLMContextAggregatorPair(context)
 
-
-    
-
     rtvi = RTVIProcessor()
-
 
     # Pipeline - assembled from reusable components
     pipeline = Pipeline([
         transport.input(),
-
         rtvi,
-
         stt,
-
-        
         context_aggregator.user(),
-
         llm,
-
         tts,
-
-        
         transport.output(),
-
-        
-        
         context_aggregator.assistant(),
-
     ])
 
 
@@ -130,17 +108,11 @@ async def run_bot(transport: BaseTransport):
         logger.info("Client disconnected")
         await task.cancel()
 
-
-
-
     runner = PipelineRunner(handle_sigint=False)
-
     await runner.run(task)
-
 
 async def bot(runner_args: RunnerArguments):
     """Main bot entry point."""
-
     transport = None
 
     match runner_args:
@@ -162,8 +134,6 @@ async def bot(runner_args: RunnerArguments):
 
     await run_bot(transport)
 
-
 if __name__ == "__main__":
     from pipecat.runner.run import main
-
     main()
