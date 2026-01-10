@@ -1,5 +1,7 @@
 import os
 import asyncio
+import uuid
+
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -63,44 +65,73 @@ async def run_bot(transport: BaseTransport):
     # )
 
     # 2. Authority Flow Configuration
+    # flow_config = {
+    #     "initial_node": "greeting",
+    #     "nodes": {
+    #         "greeting": NodeConfig(
+    #             role_messages=[{
+    #                 "role": "system", 
+    #                 "content": "You are Alex, a Senior Recruiter. Your tone is professional, authoritative, and steady."
+    #             }],
+    #             task_messages=[{
+    #                 "role": "system", 
+    #                 "content": "Greet the user: 'Hello, I am Alex. Thank you for joining. Please tell me your name and the role you are applying for.' Once they answer, call 'transition_to_interview'."
+    #             }],
+    #             functions=[FlowsFunctionSchema(
+    #                 name="transition_to_interview",
+    #                 handler=transition_to_interview,
+    #                 description="Move to the interview questions after introduction",
+    #                 properties={},
+    #                 required=[]
+    #             )]
+    #         ),
+    #         "interview": NodeConfig(
+    #             task_messages=[{
+    #                 "role": "system", 
+    #                 "content": "Ask exactly two questions: 1. Their biggest achievement. 2. Their preferred work environment. After both are answered, call 'end_the_call'."
+    #             }],
+    #             functions=[FlowsFunctionSchema(
+    #                 name="end_the_call",
+    #                 handler=end_the_call,
+    #                 description="Finish the interview session",
+    #                 properties={},
+    #                 required=[]
+    #             )]
+    #         ),
+    #         "exit": NodeConfig(
+    #             task_messages=[{
+    #                 "role": "system", 
+    #                 "content": "Say: 'Thank you. We have what we need. Our team will contact you soon. Goodbye.' Then end the call."
+    #             }],
+    #             post_actions=[EndFrame()]
+    #         )
+    #     }
+    # }
+
     flow_config = {
-        "initial_node": "greeting",
+        "initial_node": "ice_breaker",
         "nodes": {
-            "greeting": NodeConfig(
-                role_messages=[{
-                    "role": "system", 
-                    "content": "You are Alex, a Senior Recruiter. Your tone is professional, authoritative, and steady."
-                }],
-                task_messages=[{
-                    "role": "system", 
-                    "content": "Greet the user: 'Hello, I am Alex. Thank you for joining. Please tell me your name and the role you are applying for.' Once they answer, call 'transition_to_interview'."
-                }],
+            "ice_breaker": NodeConfig(
+                role_messages=[{"role": "system", "content": "You are Alex. A human participant has just joined. Be warm, professional, and slightly casual to break the ice."}],
+                task_messages=[{"role": "system", "content": "Greet them: 'Hello! I am Alex. Glad you could make it. How is your day going so far?' Engage in 1-2 rounds of small talk. If they seem ready, call 'start_interview'."}],
                 functions=[FlowsFunctionSchema(
-                    name="transition_to_interview",
+                    name="start_interview",
                     handler=transition_to_interview,
-                    description="Move to the interview questions after introduction",
-                    properties={},
-                    required=[]
+                    description="Move to the formal interview questions",
+                    properties={}, required=[]
                 )]
             ),
             "interview": NodeConfig(
-                task_messages=[{
-                    "role": "system", 
-                    "content": "Ask exactly two questions: 1. Their biggest achievement. 2. Their preferred work environment. After both are answered, call 'end_the_call'."
-                }],
+                task_messages=[{"role": "system", "content": "Transition smoothly: 'Great, let's dive in.' Ask your professional questions. When finished, call 'end_call'."}],
                 functions=[FlowsFunctionSchema(
-                    name="end_the_call",
+                    name="end_call",
                     handler=end_the_call,
-                    description="Finish the interview session",
-                    properties={},
-                    required=[]
+                    description="Finish the session",
+                    properties={}, required=[]
                 )]
             ),
             "exit": NodeConfig(
-                task_messages=[{
-                    "role": "system", 
-                    "content": "Say: 'Thank you. We have what we need. Our team will contact you soon. Goodbye.' Then end the call."
-                }],
+                task_messages=[{"role": "system", "content": "Say: 'It was a pleasure meeting you. Goodbye!'"}],
                 post_actions=[EndFrame()]
             )
         }
@@ -122,29 +153,55 @@ async def run_bot(transport: BaseTransport):
     task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
 
     # 3. FIX: Initializing with Keyword Arguments
-    flow_manager = FlowManager(
-        flow_config=flow_config,
-        task=task,
-        llm=llm,
-        context_aggregator=context_aggregator
-    )
-    
+    # flow_manager = FlowManager(
+    #     flow_config=flow_config,
+    #     task=task,
+    #     llm=llm,
+    #     context_aggregator=context_aggregator
+    # )
+
+    flow_manager = FlowManager(flow_config=flow_config, task=task, llm=llm, context_aggregator=context_aggregator)    
     await flow_manager.initialize()
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         # Initial greeting from Alex
+        # await task.queue_frames([LLMRunFrame()])
+        logger.info(f"Client connected: {client['id']}")    
+
+    @transport.event_handler("on_participant_joined")
+    async def on_participant_joined(transport, participant):
+        # 1. Check if it's a human (Daily participants have 'owner' or 'user' properties)
+        # 2. Only greet if it's NOT the bot itself
+        logger.info(f"Human joined: {participant['id']}. Starting greeting...")
+        
+        # Wait 2 seconds to let the human's audio settle (feels more natural)
+        await asyncio.sleep(2)
+        
+        # Now, and only now, Alex speaks
         await task.queue_frames([LLMRunFrame()])
 
-    runner = PipelineRunner(handle_sigint=False)
+    @transport.event_handler("on_participant_left")
+    async def on_participant_left(transport, participant):
+        logger.info("Human left the room. Shutting down bot.")
+        # End the task and leave the room to prevent ghost bots/rate limits
+        await task.cancel()
+        await transport.leave()
+
+    # runner = PipelineRunner(handle_sigint=False)
+    runner = PipelineRunner()
     await runner.run(task)
 
 async def bot(runner_args: RunnerArguments):
+
+    unique_id = str(uuid.uuid4())[:4]
+    bot_display_name = f"Senior Recruiter Alex ({unique_id})"
+    
     if isinstance(runner_args, DailyRunnerArguments):
         transport = DailyTransport(
             runner_args.room_url,
             runner_args.token,
-            "Senior Recruiter (Alex)",
+            bot_display_name,
             params=DailyParams(
                 audio_in_enabled=True,
                 audio_out_enabled=True,
@@ -152,7 +209,19 @@ async def bot(runner_args: RunnerArguments):
                 turn_analyzer=LocalSmartTurnAnalyzerV3(),
             ),
         )
-        await run_bot(transport)
+        # await run_bot(transport)
+        logger.info(f"Starting bot instance: {bot_display_name}")
+        
+        try:
+            await run_bot(transport)
+        except Exception as e:
+                logger.error(f"An error occurred during the session: {e}")
+        finally:
+            # ✅ Correct method to exit the Daily room
+            await transport.leave()
+            logger.info(f"Instance {unique_id} has left the room.")
+    else:
+        raise ValueError("Unsupported transport type")
 
 if __name__ == "__main__":
     from pipecat.runner.run import main
