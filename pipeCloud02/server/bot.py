@@ -50,6 +50,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
 )
+from pipecat.observers.loggers.debug_log_observer import DebugLogObserver
 
 from pipecat.processors.frameworks.rtvi import (
     RTVIProcessor,
@@ -65,17 +66,22 @@ from pipecat.runner.run import main
 
 import asyncio
 
+# Remove default logger and add a detailed one
+logger.remove()
+logger.add(
+    sys.stderr, 
+    level="DEBUG",  # Change to "TRACE" for even more detail
+    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level:7}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+)
+
+# Force detailed logging for the cartesia and websocket modules
+import logging
+logging.getLogger("pipecat").setLevel(logging.DEBUG)
+logging.getLogger("websockets").setLevel(logging.DEBUG)
+
 shutdown_event = asyncio.Event()
 
-# ------------------------------------------------------------------------------
-# ENV
-# ------------------------------------------------------------------------------
-
 load_dotenv(override=True)
-
-# ------------------------------------------------------------------------------
-# SINGLETON GUARD (critical)
-# ------------------------------------------------------------------------------
 
 PID_FILE = "/tmp/pipecat_daily_bot.pid"
 
@@ -90,7 +96,6 @@ def ensure_single_instance():
 def cleanup():
     if os.path.exists(PID_FILE):
         os.remove(PID_FILE)
-
 
 def handle_signal(sig, frame):
     if shutdown_event.is_set():
@@ -176,7 +181,7 @@ async def run_bot(transport: BaseTransport):
             stt,
             context_aggregator.user(),
             llm,
-            # tts,  # disabled due to websocket error, may be quota issue
+            tts,  # disabled due to websocket error, may be quota issue
             transport.output(),
             context_aggregator.assistant(),
         ]
@@ -188,7 +193,11 @@ async def run_bot(transport: BaseTransport):
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
-        observers=[RTVIObserver(rtvi)],
+        observers=[
+            RTVIObserver(rtvi),
+            # DebugLogObserver() # <--- This will log every single frame movement
+        ],
+        
     )
 
     @rtvi.event_handler("on_client_ready")
@@ -310,6 +319,7 @@ async def bot():
 
         try:
             # Give the bot 1.5 seconds to clean up nicely
+            logger.success("Trying to shutdown gracefully.")
             await asyncio.wait_for(force_shutdown(), timeout=1.5)
             logger.success("Graceful shutdown successful.")
         except asyncio.TimeoutError:
