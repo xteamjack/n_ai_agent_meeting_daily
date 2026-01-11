@@ -23,6 +23,8 @@ import sys
 import traceback
 import atexit
 import signal
+import asyncio
+import contextlib
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -61,6 +63,10 @@ from pipecat.frames.frames import LLMRunFrame
 from pipecat.runner.types import DailyRunnerArguments, RunnerArguments
 from pipecat.runner.run import main
 
+import asyncio
+
+shutdown_event = asyncio.Event()
+
 # ------------------------------------------------------------------------------
 # ENV
 # ------------------------------------------------------------------------------
@@ -86,9 +92,15 @@ def cleanup():
         os.remove(PID_FILE)
 
 
-atexit.register(cleanup)
-signal.signal(signal.SIGTERM, lambda *_: cleanup())
-signal.signal(signal.SIGINT, lambda *_: cleanup())
+def handle_signal(sig, frame):
+    if shutdown_event.is_set():
+        return
+    logger.warning(f"Received signal {sig}, shutting down")
+    shutdown_event.set()
+
+signal.signal(signal.SIGINT, handle_signal)
+signal.signal(signal.SIGTERM, handle_signal)
+
 
 # ------------------------------------------------------------------------------
 # BOT LOGIC
@@ -213,51 +225,119 @@ async def run_bot(transport: BaseTransport):
         logger.info(f"CHAT MESSAGE RECEIVED: {message}")
 
     runner = PipelineRunner(handle_sigint=False)
-    await runner.run(task)
+    # await runner.run(task)
+    runner_task = asyncio.create_task(runner.run(task))
+    return runner, task, runner_task
 
 # ------------------------------------------------------------------------------
 # ENTRYPOINT
 # ------------------------------------------------------------------------------
 
-async def bot(runner_args: RunnerArguments):
+# async def bot(runner_args: RunnerArguments):
+#     transport = None
+
+#     match runner_args:
+#         case DailyRunnerArguments():
+#             room_url = await create_unique_room()
+#             logger.info(f"meeting room {room_url}")
+#             transport = DailyTransport(
+#                 room_url,
+#                 token=None,
+#                 bot_name="Pipecat Bot",
+#                 params=DailyParams(
+#                     audio_in_enabled=True,
+#                     audio_out_enabled=True,
+#                     vad_analyzer=SileroVADAnalyzer(
+#                         params=VADParams(stop_secs=0.2)
+#                     ),
+#                     turn_analyzer=LocalSmartTurnAnalyzerV3(),
+#                 ),
+#             )
+#         case _:
+#             logger.error(f"Unsupported runner arguments: {type(runner_args)}")
+#             return
+
+#     await run_bot(transport)
+
+async def bot():
     transport = None
+    runner = None
+    task = None
+    runner_task = None
 
-    match runner_args:
-        case DailyRunnerArguments():
-            room_url = await create_unique_room()
-            logger.info(f"meeting room {room_url}")
-            transport = DailyTransport(
-                room_url,
-                token=None,
-                bot_name="Pipecat Bot",
-                params=DailyParams(
-                    audio_in_enabled=True,
-                    audio_out_enabled=True,
-                    vad_analyzer=SileroVADAnalyzer(
-                        params=VADParams(stop_secs=0.2)
-                    ),
-                    turn_analyzer=LocalSmartTurnAnalyzerV3(),
+    try:
+        room_url = await create_unique_room()
+        logger.info(f"meeting room {room_url}")
+
+        transport = DailyTransport(
+            room_url,
+            token=None,
+            bot_name="Pipecat Bot",
+            params=DailyParams(
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                vad_analyzer=SileroVADAnalyzer(
+                    params=VADParams(stop_secs=0.2)
                 ),
-            )
-        case _:
-            logger.error(f"Unsupported runner arguments: {type(runner_args)}")
-            return
+                turn_analyzer=LocalSmartTurnAnalyzerV3(),
+            ),
+        )
 
-    await run_bot(transport)
+        runner, task, runner_task = await run_bot(transport)
 
-# ------------------------------------------------------------------------------
-# MAIN (CLI ONLY)
-# ------------------------------------------------------------------------------
+        # Block until Ctrl-C / SIGTERM
+        await shutdown_event.wait()
+
+    finally:
+        logger.info("Triggering exit sequence...")
+        
+        # 1. Clear the PID file immediately so a new bot can start
+        cleanup()
+
+        async def force_shutdown():
+            try:
+                # Tell the runner to stop (non-blocking signal)
+                if runner:
+                    logger.debug("Signaling runner to stop...")
+                    await runner.stop()
+                
+                # Close transport (this is often where the hang happens)
+                if transport:
+                    logger.debug("Closing transport...")
+                    await transport.close()
+            except Exception as e:
+                logger.error(f"Error during graceful shutdown: {e}")
+
+        try:
+            # Give the bot 1.5 seconds to clean up nicely
+            await asyncio.wait_for(force_shutdown(), timeout=1.5)
+            logger.success("Graceful shutdown successful.")
+        except asyncio.TimeoutError:
+            logger.warning("Shutdown timed out - forcing exit now.")
+        except Exception as e:
+            logger.error(f"Shutdown encountered an error: {e}")
+        finally:
+            # THE KILL SWITCH
+            # This bypasses the event loop's wait and terminates the process
+            logger.info("Final process exit.")
+            os._exit(0)
+
+
+async def shutdown_with_timeout(coro, timeout=2):
+    try:
+        await asyncio.wait_for(coro, timeout)
+    except asyncio.TimeoutError:
+        logger.error("Shutdown step timed out")
+    except Exception:
+        logger.exception("Shutdown step failed")
 
 if __name__ == "__main__":
-    
-    
-    DAILY_API_KEY = os.getenv("DAILY_API_KEY")
-    DAILY_DOMAIN = os.getenv("DAILY_DOMAIN")
-
-    logger.info(f"DAILY_API_KEY is {DAILY_API_KEY}...")
     ensure_single_instance()
-    main()
+
+    try:
+        asyncio.run(bot())
+    except KeyboardInterrupt:
+        pass
 
 def hand_exception(e: Exception, msg: str = "An unexpected error occurred", exit_on_error: bool = False):
     """

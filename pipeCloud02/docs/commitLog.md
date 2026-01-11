@@ -11,3 +11,6 @@
 - Creating a new meeting url for each meeting instance also helped in solving the issue
 - However now the process not terminating on ^c, this needs to be fixed
 
+## 20260111a - Control C issue addressed
+- Issue: Pipeline process is getting struct and not terminating gracefully
+- a force shutdown introduced as KILL switch
