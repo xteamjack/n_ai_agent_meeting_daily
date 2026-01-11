@@ -14,68 +14,132 @@ Run the bot using::
     uv run bot.py
 """
 
+"""
+pipeCloud02 - Pipecat Voice Agent
+"""
+
+import os
+import sys
+import traceback
+import atexit
+import signal
+
+from dotenv import load_dotenv
+from loguru import logger
+
+from pydantic import ValidationError
 
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.transports.daily.transport import DailyTransport, DailyParams
-from pipecat.processors.aggregators.llm_context import LLMContext
-from loguru import logger
-from pipecat.runner.types import DailyRunnerArguments
-from pipecat.audio.vad.vad_analyzer import VADParams
-from dotenv import load_dotenv
-import os
-from pipecat.services.cartesia.tts import CartesiaTTSService
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
-from pipecat.frames.frames import LLMRunFrame
-from pipecat.transports.base_transport import BaseTransport
-from pipecat.runner.types import RunnerArguments
-from pipecat.services.deepgram.stt import DeepgramSTTService
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
-from pipecat.services.groq.llm import GroqLLMService
-from pipecat.processors.frameworks.rtvi import RTVIObserver, RTVIProcessor, RTVIConfig
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
+
+from pipecat.transports.daily.transport import DailyTransport, DailyParams
+from pipecat.transports.base_transport import BaseTransport
+
+from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.groq.llm import GroqLLMService
+from pipecat.services.cartesia.tts import CartesiaTTSService
+
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+)
+
+from pipecat.processors.frameworks.rtvi import (
+    RTVIProcessor,
+    RTVIObserver,
+    RTVIConfig,
+)
+
+from daily_room import create_unique_room
+
+from pipecat.frames.frames import LLMRunFrame
+from pipecat.runner.types import DailyRunnerArguments, RunnerArguments
+from pipecat.runner.run import main
+
+# ------------------------------------------------------------------------------
+# ENV
+# ------------------------------------------------------------------------------
 
 load_dotenv(override=True)
 
-import pipecat
-logger.info(f"Running Pipecat {pipecat.__version__}")
+# ------------------------------------------------------------------------------
+# SINGLETON GUARD (critical)
+# ------------------------------------------------------------------------------
+
+PID_FILE = "/tmp/pipecat_daily_bot.pid"
+
+def ensure_single_instance():
+    if os.path.exists(PID_FILE):
+        logger.error("Pipecat bot already running. Exiting.")
+        sys.exit(1)
+
+    with open(PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+        
+def cleanup():
+    if os.path.exists(PID_FILE):
+        os.remove(PID_FILE)
+
+
+atexit.register(cleanup)
+signal.signal(signal.SIGTERM, lambda *_: cleanup())
+signal.signal(signal.SIGINT, lambda *_: cleanup())
+
+# ------------------------------------------------------------------------------
+# BOT LOGIC
+# ------------------------------------------------------------------------------
 
 async def run_bot(transport: BaseTransport):
-    """Main bot logic."""
     logger.info("Starting bot")
 
-    # Speech-to-Text service
-    stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
+    # STT
+    try:
+        stt = DeepgramSTTService(
+            api_key=os.getenv("DEEPGRAM_API_KEY")
+        )
+    except Exception as e:
+        hand_exception(e, "Error initiating Deepgram STT service")
+        raise
 
-    # Text-to-Speech service
-    tts = CartesiaTTSService(
+
+    # TTS
+    try:
+        tts = CartesiaTTSService(
             api_key=os.getenv("CARTESIA_API_KEY"),
-            voice_id=os.getenv("CARTESIA_VOICE_ID")
+            voice_id=os.getenv("CARTESIA_VOICE_ID"),
         )
+    except Exception as e:
+        hand_exception(e, "Error initiating Cartesia TTS service")
+        raise
 
-    # LLM service
-    llm = GroqLLMService(
+    # LLM
+    try: 
+        llm = GroqLLMService(
             model=os.getenv("GROQ_MODEL"),
-            api_key=os.getenv("GROQ_API_KEY")
+            api_key=os.getenv("GROQ_API_KEY"),
         )
+    except Exception as e:
+        hand_exception(e, "Error initiating Groq LLM service")
+        raise
 
+
+    # Conversation context
     messages = [
         {
             "role": "system",
-            # "content": "You are a friendly AI assistant. Respond naturally and keep your answers conversational.",
-            "content": (
-                "You are a friendly AI assistant in a voice meeting. "
-                "Keep responses natural and concise."
-            ),
-        },
+            "content": "You are a friendly AI assistant. Respond naturally and keep your answers conversational.",
+        }
     ]
 
     context = LLMContext(messages)
     context_aggregator = LLMContextAggregatorPair(context)
 
-    # rtvi = RTVIProcessor()
-    # Initialize RTVI with explicit config
+    # RTVI (0.0.98 compatible)
     rtvi = RTVIProcessor(
         config=RTVIConfig(
             config=[
@@ -93,19 +157,18 @@ async def run_bot(transport: BaseTransport):
         )
     )
 
-
-    # Pipeline - assembled from reusable components
-    pipeline = Pipeline([
-        transport.input(),
-        rtvi,
-        stt,
-        context_aggregator.user(),
-        llm,
-        tts,
-        transport.output(),
-        context_aggregator.assistant(),
-    ])
-
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            rtvi,
+            stt,
+            context_aggregator.user(),
+            llm,
+            # tts,  # disabled due to websocket error, may be quota issue
+            transport.output(),
+            context_aggregator.assistant(),
+        ]
+    )
 
     task = PipelineTask(
         pipeline,
@@ -113,75 +176,115 @@ async def run_bot(transport: BaseTransport):
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
-        observers=[
-            RTVIObserver(rtvi),
-        ],
+        observers=[RTVIObserver(rtvi)],
     )
 
-    # @rtvi.event_handler("on_client_ready")
-    # async def on_client_ready(rtvi):
-    #     await rtvi.set_bot_ready()
-        # Kick off the conversation
-        # await task.queue_frames([LLMRunFrame()])
-        
     @rtvi.event_handler("on_client_ready")
     async def on_client_ready(rtvi):
-        logger.info("calling set_bot_ready")
         await rtvi.set_bot_ready()
-        await task.queue_frames([
-            TextFrame(
-                role="assistant",
-                text="Hi! I'm ready whenever you'd like to start."
-            )
-        ])
-
-    # @transport.event_handler("on_client_connected")
-    # async def on_client_connected(transport, client):
-    #     logger.info("Client connected")
-
-    # @transport.event_handler("on_client_disconnected")
-    # async def on_client_disconnected(transport, client):
-    #     logger.info("Client disconnected")
-    #     await task.cancel()
+        await task.queue_frames([LLMRunFrame()])
     
+    @rtvi.event_handler("on_transport_message")
+    async def on_rtvi_msg(msg):
+        try:
+            pass
+        except ValidationError:
+            logger.debug("Ignoring malformed RTVI message")
+
+    @transport.event_handler("on_client_connected")
+    async def on_client_connected(transport, client):
+        logger.info("Client connected")
+
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        if client.is_bot:
-            logger.info("Bot disconnected – shutting down")
-            await task.cancel()
-        else:
-            logger.info(f"Participant left: {client.user_name}")
-
+        logger.info("Client disconnected")
+        await task.cancel()
+        
+    @transport.event_handler("on_joined")
+    async def on_joined(transport, data):
+        logger.success(f"Bot joined room {transport.room_url} as participant {data.get('participant', {}).get('id')}")
+        
+        await transport.send_message({
+            "text": "Hello! I’m ready."
+        })
+    
+    @transport.event_handler("on_message")
+    async def on_message(transport, message):
+        logger.info(f"CHAT MESSAGE RECEIVED: {message}")
 
     runner = PipelineRunner(handle_sigint=False)
     await runner.run(task)
 
+# ------------------------------------------------------------------------------
+# ENTRYPOINT
+# ------------------------------------------------------------------------------
+
 async def bot(runner_args: RunnerArguments):
-    """Main bot entry point."""
     transport = None
 
     match runner_args:
         case DailyRunnerArguments():
+            room_url = await create_unique_room()
+            logger.info(f"meeting room {room_url}")
             transport = DailyTransport(
-                runner_args.room_url,
-                runner_args.token,
-                "Pipecat Bot",
+                room_url,
+                token=None,
+                bot_name="Pipecat Bot",
                 params=DailyParams(
                     audio_in_enabled=True,
                     audio_out_enabled=True,
-                    vad_analyzer=SileroVADAnalyzer(params=VADParams(
-                        stop_secs=0.5,
-                        min_speech_secs=0.3,
-                    )),
+                    vad_analyzer=SileroVADAnalyzer(
+                        params=VADParams(stop_secs=0.2)
+                    ),
                     turn_analyzer=LocalSmartTurnAnalyzerV3(),
                 ),
             )
         case _:
-            logger.error(f"Unsupported runner arguments type: {type(runner_args)}")
+            logger.error(f"Unsupported runner arguments: {type(runner_args)}")
             return
 
     await run_bot(transport)
 
+# ------------------------------------------------------------------------------
+# MAIN (CLI ONLY)
+# ------------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    from pipecat.runner.run import main
+    
+    
+    DAILY_API_KEY = os.getenv("DAILY_API_KEY")
+    DAILY_DOMAIN = os.getenv("DAILY_DOMAIN")
+
+    logger.info(f"DAILY_API_KEY is {DAILY_API_KEY}...")
+    ensure_single_instance()
     main()
+
+def hand_exception(e: Exception, msg: str = "An unexpected error occurred", exit_on_error: bool = False):
+    """
+    Handle exceptions with Loguru, log details, and optionally end the process.
+    
+    Parameters:
+        e (Exception): The exception object.
+        msg (str): Business context message.
+        exit_on_error (bool): If True, terminate the process after logging.
+    """
+    error_type = type(e).__name__
+    error_message = str(e)
+    stack_trace = traceback.format_exc()
+
+    logger.error(f"[Business Context] {msg}")
+    logger.error(f"Exception Type: {error_type}")
+    logger.error(f"Exception Message: {error_message}")
+    logger.error(f"Stack Trace:\n{stack_trace}")
+
+    if exit_on_error:
+        logger.critical("Terminating process due to exception.")
+        sys.exit(1)  # Exit with non-zero code to indicate failure
+
+    return {
+        "business_message": msg,
+        "type": error_type,
+        "message": error_message,
+        "stack_trace": stack_trace
+    }
+
