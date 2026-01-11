@@ -99,7 +99,8 @@ def cleanup():
 
 def handle_signal(sig, frame):
     if shutdown_event.is_set():
-        return
+        logger.warning("Forcing immediate exit...")
+        os._exit(1)  # Second Ctrl+C forces exit
     logger.warning(f"Received signal {sig}, shutting down")
     shutdown_event.set()
 
@@ -298,39 +299,26 @@ async def bot():
         await shutdown_event.wait()
 
     finally:
-        logger.info("Triggering exit sequence...")
+        logger.info("Bot execution finished. Cleaning up...")
         
-        # 1. Clear the PID file immediately so a new bot can start
+        # 1. Immediate Cleanup
         cleanup()
 
-        async def force_shutdown():
+        # 2. Short-circuited Transport Close
+        # We don't await transport.stop() because the runner already stopped it.
+        # We only try to close the session.
+        if transport:
             try:
-                # Tell the runner to stop (non-blocking signal)
-                if runner:
-                    logger.debug("Signaling runner to stop...")
-                    await runner.stop()
-                
-                # Close transport (this is often where the hang happens)
-                if transport:
-                    logger.debug("Closing transport...")
-                    await transport.close()
-            except Exception as e:
-                logger.error(f"Error during graceful shutdown: {e}")
+                # Give Daily 500ms to say goodbye, then move on
+                await asyncio.wait_for(transport.close(), timeout=0.5)
+            except Exception:
+                pass 
 
-        try:
-            # Give the bot 1.5 seconds to clean up nicely
-            logger.success("Trying to shutdown gracefully.")
-            await asyncio.wait_for(force_shutdown(), timeout=1.5)
-            logger.success("Graceful shutdown successful.")
-        except asyncio.TimeoutError:
-            logger.warning("Shutdown timed out - forcing exit now.")
-        except Exception as e:
-            logger.error(f"Shutdown encountered an error: {e}")
-        finally:
-            # THE KILL SWITCH
-            # This bypasses the event loop's wait and terminates the process
-            logger.info("Final process exit.")
-            os._exit(0)
+        logger.success("Cleanup finished. Forcing process termination.")
+        
+        # 3. THE "NUKE"
+        # This is the only way to reliably stop Daily/WebRTC background threads
+        os._exit(0)
 
 
 async def shutdown_with_timeout(coro, timeout=2):
